@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 from uuid import uuid4
 import os
+import requests
 from dotenv import load_dotenv
 from supabase import create_client
 from openai import OpenAI
@@ -29,6 +30,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Webhook URL for n8n
+N8N_WEBHOOK_URL = "https://ibrahimalgazi.app.n8n.cloud/webhook/4d888982-1a0e-41e6-a877-f6ebb18460f3"
+
 # Pydantic models
 class Task(BaseModel):
     title: str
@@ -46,6 +50,10 @@ class UpdateInput(BaseModel):
     update_text: str
     type: str  # "daily" or "weekly"
 
+class CommandInput(BaseModel):
+    type: str  # e.g. "send_email", "order_supply"
+    payload: dict
+
 @app.post("/projects")
 async def create_project(data: ProjectInput):
     try:
@@ -54,10 +62,10 @@ async def create_project(data: ProjectInput):
 
 1. Break down the goal or plan into detailed project phases with realistic steps.
 2. Give expert suggestions that could improve efficiency, reduce costs, or add value.
-3. Provide a detailed timeline for each phase, based on local practices in the UAE construction industry in dubai specfically.
+3. Provide a detailed timeline for each phase, based on local practices in the UAE construction industry in Dubai specifically.
 4. Highlight key risks and warnings to watch out for at each step (permits, logistics, climate, regulations, suppliers, labor, etc.).
 
-The output should help a construction business owner in Dubai take immediate, clear action toward achieving their goal please do not include any intro or outro.
+The output should help a construction business owner in Dubai take immediate, clear action toward achieving their goal. Please do not include any intro or outro.
 
 Here is the project goal: {data.project_goal}."""
         if data.num_phases:
@@ -141,6 +149,19 @@ async def upload_document(file: UploadFile = File(...), project_id: str = Form(.
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+
+@app.post("/trigger-command")
+async def trigger_command(command: CommandInput):
+    try:
+        response = requests.post(N8N_WEBHOOK_URL, json={
+            "type": command.type,
+            "payload": command.payload
+        })
+        response.raise_for_status()
+        return {"status": "sent", "response": response.json()}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Command failed: {str(e)}")
 
 @app.get("/")
 async def root():
