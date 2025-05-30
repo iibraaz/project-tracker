@@ -46,20 +46,23 @@ class UpdateInput(BaseModel):
     type: str  # "daily" or "weekly"
 
 class CommandInput(BaseModel):
-    type: str  # e.g. "send_email"
+    type: str  # "send_email", "order_supply", etc.
     payload: dict
 
-# Endpoints
+# Root
 @app.get("/")
 async def root():
     return {"message": "AI Project Assistant API is running."}
 
+# Project creation
 @app.post("/projects")
 async def create_project(data: ProjectInput):
     try:
-        gpt_prompt = f"""You are an expert construction project consultant in Dubai. Break down the following project goal into phases with timelines, expert tips, risks, and warnings:\n\n{data.project_goal}"""
+        gpt_prompt = f"""You are an expert construction project consultant in Dubai. Break down the project goal into phases, give suggestions, timelines, and warnings.
+
+Project goal: {data.project_goal}"""
         if data.num_phases:
-            gpt_prompt += f"\n\nLimit the breakdown to {data.num_phases} phases."
+            gpt_prompt += f" Limit to {data.num_phases} phases."
 
         response = openai_client.chat.completions.create(
             model="gpt-4",
@@ -80,15 +83,17 @@ async def create_project(data: ProjectInput):
         }).execute()
 
         return {"project_id": project_id, "plan": plan}
+
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
+# Project updates
 @app.post("/updates")
 async def submit_update(update: UpdateInput):
     try:
         if update.type == "weekly":
-            prompt = f"Analyze this weekly update and list key needs, issues, and progress:\n{update.update_text}"
+            prompt = f"Analyze this weekly update and return needs, issues, and progress:\n{update.update_text}"
             response = openai_client.chat.completions.create(
                 model="gpt-4",
                 messages=[
@@ -108,10 +113,12 @@ async def submit_update(update: UpdateInput):
         }).execute()
 
         return {"summary": summary}
+
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to submit update: {str(e)}")
 
+# File upload
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...), project_id: str = Form(...)):
     try:
@@ -128,56 +135,51 @@ async def upload_document(file: UploadFile = File(...), project_id: str = Form(.
         }).execute()
 
         return {"url": public_url}
+
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
 
+# Command trigger (including email)
 @app.post("/trigger-command")
 async def trigger_command(command: CommandInput):
     try:
         if command.type == "send_email":
-            recipient_name = command.payload.get("recipient_name")
+            recipient_name = command.payload.get("recipient")
             subject = command.payload.get("subject")
-            body_context = command.payload.get("body_context")
+            message = command.payload.get("message")
 
-            # Fetch supplier email from Supabase
-            supplier_response = supabase.table("suppliers").select("email").eq("name", recipient_name).single().execute()
-            if supplier_response.data is None:
-                raise HTTPException(status_code=404, detail=f"Supplier '{recipient_name}' not found.")
+            if not recipient_name or not subject or not message:
+                raise HTTPException(status_code=400, detail="Missing recipient, subject, or message.")
 
-            recipient_email = supplier_response.data["email"]
+            # Fetch email from Supabase
+            supplier_response = supabase.table("suppliers").select("email").ilike("name", f"%{recipient_name}%").execute()
+            records = supplier_response.data
 
-            # Generate email content using GPT
-            gpt_response = openai_client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You write professional supplier emails."},
-                    {"role": "user", "content": f"Write a formal email to {recipient_name} about: {body_context}"}
-                ]
-            )
-            email_body = gpt_response.choices[0].message.content
+            if not records or len(records) == 0:
+                raise HTTPException(status_code=404, detail=f"No supplier found with name '{recipient_name}'.")
+            if len(records) > 1:
+                raise HTTPException(status_code=400, detail=f"Multiple suppliers found with name '{recipient_name}'.")
+
+            recipient_email = records[0]["email"]
 
             # Send to n8n
-            n8n_payload = {
+            response = requests.post(N8N_WEBHOOK_URL, json={
                 "type": "send_email",
-                "recipient_name": recipient_name,
-                "recipient_email": recipient_email,
-                "subject": subject,
-                "body": email_body
-            }
-
-            response = requests.post(N8N_WEBHOOK_URL, json=n8n_payload)
+                "payload": {
+                    "to": recipient_email,
+                    "subject": subject,
+                    "message": message
+                }
+            })
             response.raise_for_status()
+            return {"status": "sent", "recipient_email": recipient_email, "response": response.json()}
 
-            return {
-                "status": "sent",
-                "to": recipient_email,
-                "subject": subject,
-                "body": email_body
-            }
-
+        # Handle other command types
         else:
-            raise HTTPException(status_code=400, detail=f"Unsupported command type: {command.type}")
+            response = requests.post(N8N_WEBHOOK_URL, json=command.dict())
+            response.raise_for_status()
+            return {"status": "sent", "response": response.json()}
 
     except Exception as e:
         traceback.print_exc()
