@@ -50,7 +50,16 @@ class UpdateInput(BaseModel):
 async def create_project(data: ProjectInput):
     try:
         # Construct GPT prompt
-        gpt_prompt = f"Break down the following project goal into phases: {data.project_goal}."
+        gpt_prompt = f"You are an expert construction project consultant in Dubai. The user will provide you with a high-level project goal. Your job is to:
+
+1. Break down the goal into detailed project phases with realistic steps.
+2. Give expert suggestions that could improve efficiency, reduce costs, or add value.
+3. Provide a detailed timeline for each phase, based on local practices in the UAE construction industry.
+4. Highlight key risks and warnings to watch out for at each step (permits, logistics, climate, regulations, suppliers, labor, etc.).
+
+The output should help a construction business owner in Dubai take immediate, clear action toward achieving their goal.
+
+Here is the project goal: {data.project_goal}."
         if data.num_phases:
             gpt_prompt += f" Limit the breakdown to {data.num_phases} phases."
 
