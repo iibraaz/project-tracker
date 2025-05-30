@@ -31,7 +31,7 @@ app.add_middleware(
 )
 
 # Webhook URL for n8n
-N8N_WEBHOOK_URL = "https://ibrahimalgazi.app.n8n.cloud/webhook/4d888982-1a0e-41e6-a877-f6ebb18460f3"
+N8N_WEBHOOK_URL = "https://ibrahimalgazi.app.n8n.cloud/webhook-test/e73ca2e1-ab3f-4009-b6b3-d9c6a08e851c"
 
 # Pydantic models
 class Task(BaseModel):
