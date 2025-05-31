@@ -54,6 +54,7 @@ class CommandInput(BaseModel):
 async def root():
     return {"message": "AI Project Assistant API is running."}
 
+
 @app.post("/projects")
 async def create_project(data: ProjectInput):
     try:
@@ -70,7 +71,7 @@ Project goal: {data.project_goal}"""
                 {"role": "user", "content": prompt}
             ]
         )
-        plan = response.choices[0].message.content
+        plan = response.choices[0].message.content.strip()
         project_id = str(uuid4())
 
         supabase.table("projects").insert({
@@ -87,9 +88,11 @@ Project goal: {data.project_goal}"""
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
+
 @app.post("/updates")
 async def submit_update(update: UpdateInput):
     try:
+        summary = update.update_text
         if update.type == "weekly":
             prompt = f"Analyze this weekly update and return needs, issues, and progress:\n{update.update_text}"
             response = openai_client.chat.completions.create(
@@ -99,9 +102,7 @@ async def submit_update(update: UpdateInput):
                     {"role": "user", "content": prompt}
                 ]
             )
-            summary = response.choices[0].message.content
-        else:
-            summary = update.update_text
+            summary = response.choices[0].message.content.strip()
 
         supabase.table("updates").insert({
             "project_id": update.project_id,
@@ -116,13 +117,14 @@ async def submit_update(update: UpdateInput):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to submit update: {str(e)}")
 
+
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...), project_id: str = Form(...)):
     try:
         file_bytes = await file.read()
         file_path = f"documents/{project_id}/{file.filename}"
 
-        supabase.storage.from_("documents").upload(file_path, file_bytes)
+        supabase.storage.from_("documents").upload(file_path, file_bytes, {"content-type": file.content_type})
         public_url = supabase.storage.from_("documents").get_public_url(file_path).get("publicURL")
 
         supabase.table("documents").insert({
@@ -136,6 +138,7 @@ async def upload_document(file: UploadFile = File(...), project_id: str = Form(.
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+
 
 @app.post("/trigger-command")
 async def trigger_command(command: CommandInput):
@@ -174,7 +177,7 @@ async def trigger_command(command: CommandInput):
                 "response": n8n_response.json()
             }
 
-        # Default passthrough for other commands
+        # Fallback: Send any other command directly to n8n
         else:
             n8n_response = requests.post(N8N_WEBHOOK_URL, json=command.dict())
             n8n_response.raise_for_status()
