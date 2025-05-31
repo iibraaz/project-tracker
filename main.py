@@ -33,7 +33,7 @@ app.add_middleware(
 # Webhook URL for n8n
 N8N_WEBHOOK_URL = "https://ibrahimalgazi.app.n8n.cloud/webhook-test/4d888982-1a0e-41e6-a877-f6ebb18460f3"
 
-# Pydantic models
+# Models
 class ProjectInput(BaseModel):
     user_id: str
     project_name: str
@@ -46,34 +46,33 @@ class UpdateInput(BaseModel):
     type: str  # "daily" or "weekly"
 
 class CommandInput(BaseModel):
-    type: str  # "send_email", "order_supply", etc.
+    type: str  # e.g., "send_email", "order_supply"
     payload: dict
 
-# Root
+# Routes
 @app.get("/")
 async def root():
     return {"message": "AI Project Assistant API is running."}
 
-# Project creation
 @app.post("/projects")
 async def create_project(data: ProjectInput):
     try:
-        gpt_prompt = f"""You are an expert construction project consultant in Dubai. Break down the project goal into phases, give suggestions, timelines, and warnings.
+        prompt = f"""You are an expert construction project consultant in Dubai. Break down the project goal into phases, give suggestions, timelines, and warnings.
 
 Project goal: {data.project_goal}"""
         if data.num_phases:
-            gpt_prompt += f" Limit to {data.num_phases} phases."
+            prompt += f" Limit to {data.num_phases} phases."
 
         response = openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that structures projects."},
-                {"role": "user", "content": gpt_prompt}
+                {"role": "user", "content": prompt}
             ]
         )
         plan = response.choices[0].message.content
-
         project_id = str(uuid4())
+
         supabase.table("projects").insert({
             "id": project_id,
             "user_id": data.user_id,
@@ -88,7 +87,6 @@ Project goal: {data.project_goal}"""
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
-# Project updates
 @app.post("/updates")
 async def submit_update(update: UpdateInput):
     try:
@@ -118,7 +116,6 @@ async def submit_update(update: UpdateInput):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to submit update: {str(e)}")
 
-# File upload
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...), project_id: str = Form(...)):
     try:
@@ -140,7 +137,6 @@ async def upload_document(file: UploadFile = File(...), project_id: str = Form(.
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
 
-# Command trigger (including email)
 @app.post("/trigger-command")
 async def trigger_command(command: CommandInput):
     try:
@@ -149,22 +145,20 @@ async def trigger_command(command: CommandInput):
             subject = command.payload.get("subject")
             message = command.payload.get("message")
 
-            if not recipient_name or not subject or not message:
+            if not all([recipient_name, subject, message]):
                 raise HTTPException(status_code=400, detail="Missing recipient, subject, or message.")
 
-            # Fetch email from Supabase
             supplier_response = supabase.table("suppliers").select("email").ilike("name", f"%{recipient_name}%").execute()
-            records = supplier_response.data
+            suppliers = supplier_response.data
 
-            if not records or len(records) == 0:
+            if not suppliers:
                 raise HTTPException(status_code=404, detail=f"No supplier found with name '{recipient_name}'.")
-            if len(records) > 1:
+            if len(suppliers) > 1:
                 raise HTTPException(status_code=400, detail=f"Multiple suppliers found with name '{recipient_name}'.")
 
-            recipient_email = records[0]["email"]
+            recipient_email = suppliers[0]["email"]
 
-            # Send to n8n
-            response = requests.post(N8N_WEBHOOK_URL, json={
+            n8n_response = requests.post(N8N_WEBHOOK_URL, json={
                 "type": "send_email",
                 "payload": {
                     "to": recipient_email,
@@ -172,14 +166,23 @@ async def trigger_command(command: CommandInput):
                     "message": message
                 }
             })
-            response.raise_for_status()
-            return {"status": "sent", "recipient_email": recipient_email, "response": response.json()}
+            n8n_response.raise_for_status()
 
-        # Handle other command types
+            return {
+                "status": "sent",
+                "recipient_email": recipient_email,
+                "response": n8n_response.json()
+            }
+
+        # Default passthrough for other commands
         else:
-            response = requests.post(N8N_WEBHOOK_URL, json=command.dict())
-            response.raise_for_status()
-            return {"status": "sent", "response": response.json()}
+            n8n_response = requests.post(N8N_WEBHOOK_URL, json=command.dict())
+            n8n_response.raise_for_status()
+
+            return {
+                "status": "sent",
+                "response": n8n_response.json()
+            }
 
     except Exception as e:
         traceback.print_exc()
