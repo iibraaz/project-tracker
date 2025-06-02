@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from uuid import uuid4
 import os
 import requests
@@ -46,14 +46,13 @@ class UpdateInput(BaseModel):
     type: str  # "daily" or "weekly"
 
 class CommandInput(BaseModel):
-    type: str  # e.g., "send_email", "order_supply"
-    payload: dict
+    session_id: str
+    message: str
 
 # Routes
 @app.get("/")
 async def root():
     return {"message": "AI Project Assistant API is running."}
-
 
 @app.post("/projects")
 async def create_project(data: ProjectInput):
@@ -88,7 +87,6 @@ Project goal: {data.project_goal}"""
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
 
-
 @app.post("/updates")
 async def submit_update(update: UpdateInput):
     try:
@@ -117,7 +115,6 @@ async def submit_update(update: UpdateInput):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to submit update: {str(e)}")
 
-
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...), project_id: str = Form(...)):
     try:
@@ -139,53 +136,43 @@ async def upload_document(file: UploadFile = File(...), project_id: str = Form(.
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
 
-
 @app.post("/trigger-command")
-async def trigger_command(command: CommandInput):
+async def trigger_command(data: CommandInput):
     try:
-        if command.type == "send_email":
-            recipient_name = command.payload.get("recipient")
-            subject = command.payload.get("subject")
-            message = command.payload.get("message")
+        session_id = data.session_id
+        message = data.message
 
-            if not all([recipient_name, subject, message]):
-                raise HTTPException(status_code=400, detail="Missing recipient, subject, or message.")
-
-            supplier_response = supabase.table("suppliers").select("email").ilike("name", f"%{recipient_name}%").execute()
-            suppliers = supplier_response.data
-
-            if not suppliers:
-                raise HTTPException(status_code=404, detail=f"No supplier found with name '{recipient_name}'.")
-            if len(suppliers) > 1:
-                raise HTTPException(status_code=400, detail=f"Multiple suppliers found with name '{recipient_name}'.")
-
-            recipient_email = suppliers[0]["email"]
-
-            n8n_response = requests.post(N8N_WEBHOOK_URL, json={
-                "type": "send_email",
-                "payload": {
-                    "to": recipient_email,
-                    "subject": subject,
-                    "message": message
-                }
-            })
-            n8n_response.raise_for_status()
-
-            return {
-                "status": "sent",
-                "recipient_email": recipient_email,
-                "response": n8n_response.json()
-            }
-
-        # Fallback: Send any other command directly to n8n
+        # Retrieve session state
+        session_resp = supabase.table("sessions").select("step", "context").eq("id", session_id).execute()
+        if not session_resp.data:
+            step = "initial"
+            context = {}
         else:
-            n8n_response = requests.post(N8N_WEBHOOK_URL, json=command.dict())
-            n8n_response.raise_for_status()
+            session = session_resp.data[0]
+            step = session.get("step", "initial")
+            context = session.get("context", {}) or {}
 
-            return {
-                "status": "sent",
-                "response": n8n_response.json()
-            }
+        # Chat with GPT to process the message and context
+        prompt = f"Context: {context}\nUser: {message}\nSystem: What is the next step? Respond as if you're in a chat, continuing based on the context."
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a conversational assistant helping manage command workflows."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        reply = response.choices[0].message.content.strip()
+
+        # Update session
+        supabase.table("sessions").upsert({
+            "id": session_id,
+            "step": step,
+            "context": context,
+            "last_message": message,
+            "last_response": reply
+        }).execute()
+
+        return {"reply": reply}
 
     except Exception as e:
         traceback.print_exc()
