@@ -50,9 +50,20 @@ async def chat_command(data: CommandInput):
         # STEP 1: Confirming recipient if needed
         if state == "awaiting_recipient_choice":
             options = session.get("options", [])
-            chosen = next((o for o in options if message in o["name"].lower()), None)
+            # Try exact match first
+            chosen = next((o for o in options if message == o["name"].lower()), None)
+            # Then try partial match
             if not chosen:
-                return {"status": "ambiguous", "message": "Please choose one of the following:", "options": options}
+                chosen = next((o for o in options if message in o["name"].lower()), None)
+            
+            if not chosen:
+                # Format names as a numbered list for clear selection
+                options_text = "\n".join([f"{i+1}. {o['name']}" for i, o in enumerate(options)])
+                return {
+                    "status": "ambiguous",
+                    "message": f"I found multiple matches. Please reply with the number or full name of your choice:\n{options_text}",
+                    "options": options
+                }
 
             session["recipient"] = chosen
             session["state"] = "awaiting_confirmation"
@@ -69,7 +80,7 @@ async def chat_command(data: CommandInput):
 
         # STEP 2: User approval or redraft
         if state == "awaiting_confirmation":
-            if any(word in message for word in ["yes", "okay", "go ahead", "send", "sure"]):
+            if any(word in message for word in ["yes", "okay", "go ahead", "send", "sure", "approve"]):
                 recipient = session["recipient"]
                 email_payload = {
                     "to": recipient["email"],
@@ -81,7 +92,7 @@ async def chat_command(data: CommandInput):
                 resp.raise_for_status()
                 sessions.pop(session_id, None)
                 return {"status": "sent", "message": "Email sent successfully."}
-            elif any(word in message for word in ["no", "change", "redo", "edit"]):
+            elif any(word in message for word in ["no", "change", "redo", "edit", "revise"]):
                 draft = await generate_email_draft(session["recipient"]["name"], session["topic"])
                 session["draft"] = draft
                 sessions[session_id] = session
@@ -91,7 +102,10 @@ async def chat_command(data: CommandInput):
                     "recipient": session["recipient"]["name"]
                 }
             else:
-                return {"status": "awaiting_confirmation", "message": "Should I send this email? Yes or No?"}
+                return {
+                    "status": "awaiting_confirmation",
+                    "message": "Should I send this email? Please reply with 'yes' to send or 'no' to revise it."
+                }
 
         # STEP 3: Initial user message
         extract_prompt = f"""
@@ -132,6 +146,9 @@ User request: "{data.message}"
                 }
                 for supplier in people
             ]
+            
+            # Format the options as a clear numbered list
+            options_text = "\n".join([f"{i+1}. {supplier['name']}" for i, supplier in enumerate(people)])
 
             session = {
                 "state": "awaiting_recipient_choice",
@@ -142,7 +159,7 @@ User request: "{data.message}"
 
             return {
                 "status": "ambiguous",
-                "message": "I found multiple matches. Please choose one:",
+                "message": f"I found multiple matches. Please reply with the number or full name of your choice:\n{options_text}",
                 "options": options
             }
 
