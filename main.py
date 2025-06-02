@@ -216,8 +216,12 @@ User message:
         if not recipient_name:
             return {"status": "need_input", "message": "Who should I send the email to?"}
 
-        people_resp = supabase.table("people").select("*").ilike("name", f"%{recipient_name}%").execute()
-        matches = people_resp.data
+        supplier_resp = supabase.table("suppliers").select("*").ilike("name", f"%{recipient_name}%").execute()
+
+if len(supplier_resp.data) == 0:
+    return {"response": f"No supplier found with name similar to '{recipient_name}'."}
+
+supplier = supplier_resp.data[0]
 
         if not matches:
             return {"status": "not_found", "message": f"No match found for '{recipient_name}'."}
