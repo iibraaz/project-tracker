@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from supabase import create_client
 from openai import OpenAI
 import traceback
+import json
 
 # Load environment variables
 load_dotenv()
@@ -186,7 +187,7 @@ You are an AI assistant. Extract structured intent from this user message.
 Respond ONLY in JSON with this format:
 {{
   "action": "send_email",
-  "recipient_name": "<name of recipient, if mentioned>",
+  "recipient_name": "<name of supplier, if mentioned>",
   "subject": "<email subject, if obvious>",
   "message": "<email body, if provided>"
 }}
@@ -205,7 +206,7 @@ User message:
 
         parsed = response.choices[0].message.content.strip()
         try:
-            extracted = eval(parsed)
+            extracted = json.loads(parsed)
         except Exception:
             return {"status": "error", "message": "Failed to parse message."}
 
@@ -217,27 +218,27 @@ User message:
             return {"status": "need_input", "message": "Who should I send the email to?"}
 
         supplier_resp = supabase.table("suppliers").select("*").ilike("name", f"%{recipient_name}%").execute()
-
-if len(supplier_resp.data) == 0:
-    return {"response": f"No supplier found with name similar to '{recipient_name}'."}
-
-supplier = supplier_resp.data[0]
+        matches = supplier_resp.data
 
         if not matches:
             return {"status": "not_found", "message": f"No match found for '{recipient_name}'."}
 
         if len(matches) > 1:
-            options = [person["name"] for person in matches]
+            options = [supplier["name"] for supplier in matches]
             return {"status": "ambiguous", "message": f"Which '{recipient_name}' do you mean?", "options": options}
 
-        recipient = matches[0]
-        draft_subject = subject or f"Follow-up from our conversation"
-        draft_message = email_body or f"Hi {recipient['name'].split()[0]},\n\nJust reaching out regarding the matter we discussed."
+        supplier = matches[0]
+        draft_subject = subject or f"Follow-up on {supplier['material']}"
+        draft_message = email_body or f"""Hi {supplier['name'].split()[0]},
+
+Just reaching out regarding the {supplier['material']} you’re supplying.
+
+Phone: {supplier['phone']}"""
 
         return {
             "status": "awaiting_confirmation",
-            "recipient": recipient["name"],
-            "recipient_email": recipient["email"],
+            "recipient": supplier["name"],
+            "recipient_email": supplier["email"],
             "subject": draft_subject,
             "message": draft_message
         }
