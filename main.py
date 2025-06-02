@@ -129,11 +129,22 @@ User request: "{data.message}"
                 "topic": topic
             }
             sessions[session_id] = session
-            return {
-                "status": "ambiguous",
-                "message": "I found multiple matches. Please choose one:",
-                "options": people
-            }
+           options = [
+    {
+        "id": supplier["id"],
+        "name": supplier["name"],
+        "email": supplier["email"],
+        "material": supplier.get("material", "")
+    }
+    for supplier in matches
+]
+
+return {
+    "status": "ambiguous",
+    "message": "I found multiple matches. Please choose one:",
+    "options": options
+}
+
         else:
             recipient = people[0]
             draft = await generate_email_draft(recipient["name"], topic)
