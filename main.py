@@ -11,15 +11,18 @@ from dotenv import load_dotenv
 from supabase import create_client
 from openai import OpenAI
 
+# Load environment variables
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 N8N_WEBHOOK_URL = "https://ibrahimalgazi.app.n8n.cloud/webhook-test/4d888982-1a0e-41e6-a877-f6ebb18460f3"
 
+# Initialize clients
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
+# FastAPI setup
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -50,11 +53,9 @@ async def chat_command(data: CommandInput):
             chosen = next((o for o in options if message in o["name"].lower()), None)
             if not chosen:
                 return {"status": "ambiguous", "message": "Please choose one of the following:", "options": options}
-            
+
             session["recipient"] = chosen
             session["state"] = "awaiting_confirmation"
-            sessions[session_id] = session
-
             draft = await generate_email_draft(chosen["name"], session["topic"])
             session["draft"] = draft
             sessions[session_id] = session
@@ -69,7 +70,6 @@ async def chat_command(data: CommandInput):
         # STEP 2: User approval or redraft
         if state == "awaiting_confirmation":
             if any(word in message for word in ["yes", "okay", "go ahead", "send", "sure"]):
-                # send email
                 recipient = session["recipient"]
                 email_payload = {
                     "to": recipient["email"],
@@ -95,7 +95,7 @@ async def chat_command(data: CommandInput):
 
         # STEP 3: Initial user message
         extract_prompt = f"""
-Extract the supplier name and topic from this user request. Respond in JSON with keys "recipient_name" and "topic".
+Extract the supplier name and topic from this user request. Respond in JSON with keys \"recipient_name\" and \"topic\".
 
 User request: "{data.message}"
 """
@@ -117,33 +117,34 @@ User request: "{data.message}"
         if not name:
             return {"status": "error", "message": "Could not extract a name from your request."}
 
-        # Search suppliers
         people = supabase.table("suppliers").select("*").ilike("name", f"%{name}%").execute().data
 
         if not people:
             return {"status": "not_found", "message": f"No suppliers found for '{name}'."}
+
         elif len(people) > 1:
+            options = [
+                {
+                    "id": supplier["id"],
+                    "name": supplier["name"],
+                    "email": supplier["email"],
+                    "material": supplier.get("material", "")
+                }
+                for supplier in people
+            ]
+
             session = {
                 "state": "awaiting_recipient_choice",
-                "options": people,
+                "options": options,
                 "topic": topic
             }
             sessions[session_id] = session
-           options = [
-    {
-        "id": supplier["id"],
-        "name": supplier["name"],
-        "email": supplier["email"],
-        "material": supplier.get("material", "")
-    }
-    for supplier in matches
-]
 
-return {
-    "status": "ambiguous",
-    "message": "I found multiple matches. Please choose one:",
-    "options": options
-}
+            return {
+                "status": "ambiguous",
+                "message": "I found multiple matches. Please choose one:",
+                "options": options
+            }
 
         else:
             recipient = people[0]
@@ -155,6 +156,7 @@ return {
                 "draft": draft
             }
             sessions[session_id] = session
+
             return {
                 "status": "awaiting_confirmation",
                 "message": draft,
@@ -169,7 +171,7 @@ return {
 
 async def generate_email_draft(name: str, topic: str) -> str:
     prompt = f"""
-Draft a natural, short email to {name} about this topic: "{topic}".
+Draft a natural, short email to {name} about this topic: \"{topic}\".
 Keep it professional but friendly. No fixed patterns. No sign-off needed.
 Only return the body of the email.
 """
