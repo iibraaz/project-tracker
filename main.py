@@ -142,7 +142,6 @@ async def trigger_command(data: CommandInput):
         session_id = data.session_id
         message = data.message
 
-        # Retrieve session state
         session_resp = supabase.table("sessions").select("step", "context").eq("id", session_id).execute()
         if not session_resp.data:
             step = "initial"
@@ -152,7 +151,6 @@ async def trigger_command(data: CommandInput):
             step = session.get("step", "initial")
             context = session.get("context", {}) or {}
 
-        # Chat with GPT to process the message and context
         prompt = f"Context: {context}\nUser: {message}\nSystem: What is the next step? Respond as if you're in a chat, continuing based on the context."
         response = openai_client.chat.completions.create(
             model="gpt-4",
@@ -163,7 +161,6 @@ async def trigger_command(data: CommandInput):
         )
         reply = response.choices[0].message.content.strip()
 
-        # Update session
         supabase.table("sessions").upsert({
             "id": session_id,
             "step": step,
@@ -177,3 +174,70 @@ async def trigger_command(data: CommandInput):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Command failed: {str(e)}")
+
+@app.post("/chat-command")
+async def chat_command(data: CommandInput):
+    try:
+        session_id = data.session_id
+        message = data.message
+
+        extraction_prompt = f"""
+You are an AI assistant. Extract structured intent from this user message. 
+Respond ONLY in JSON with this format:
+{{
+  "action": "send_email",
+  "recipient_name": "<name of recipient, if mentioned>",
+  "subject": "<email subject, if obvious>",
+  "message": "<email body, if provided>"
+}}
+
+User message:
+{message}
+        """
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You extract structured data from user messages."},
+                {"role": "user", "content": extraction_prompt}
+            ]
+        )
+
+        parsed = response.choices[0].message.content.strip()
+        try:
+            extracted = eval(parsed)
+        except Exception:
+            return {"status": "error", "message": "Failed to parse message."}
+
+        recipient_name = extracted.get("recipient_name", "").strip()
+        subject = extracted.get("subject", "").strip()
+        email_body = extracted.get("message", "").strip()
+
+        if not recipient_name:
+            return {"status": "need_input", "message": "Who should I send the email to?"}
+
+        people_resp = supabase.table("people").select("*").ilike("name", f"%{recipient_name}%").execute()
+        matches = people_resp.data
+
+        if not matches:
+            return {"status": "not_found", "message": f"No match found for '{recipient_name}'."}
+
+        if len(matches) > 1:
+            options = [person["name"] for person in matches]
+            return {"status": "ambiguous", "message": f"Which '{recipient_name}' do you mean?", "options": options}
+
+        recipient = matches[0]
+        draft_subject = subject or f"Follow-up from our conversation"
+        draft_message = email_body or f"Hi {recipient['name'].split()[0]},\n\nJust reaching out regarding the matter we discussed."
+
+        return {
+            "status": "awaiting_confirmation",
+            "recipient": recipient["name"],
+            "recipient_email": recipient["email"],
+            "subject": draft_subject,
+            "message": draft_message
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        return {"status": "error", "message": f"Something went wrong: {str(e)}"}
