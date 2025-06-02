@@ -31,150 +31,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Webhook URL for n8n
-N8N_WEBHOOK_URL = "https://ibrahimalgazi.app.n8n.cloud/webhook-test/4d888982-1a0e-41e6-a877-f6ebb18460f3"
-
-# Models
-class ProjectInput(BaseModel):
-    user_id: str
-    project_name: str
-    project_goal: str
-    num_phases: Optional[int] = None
-
-class UpdateInput(BaseModel):
-    project_id: str
-    update_text: str
-    type: str  # "daily" or "weekly"
-
 class CommandInput(BaseModel):
     session_id: str
     message: str
-
-# Routes
-@app.get("/")
-async def root():
-    return {"message": "AI Project Assistant API is running."}
-
-@app.post("/projects")
-async def create_project(data: ProjectInput):
-    try:
-        prompt = f"""You are an expert construction project consultant in Dubai. Break down the project goal into phases, give suggestions, timelines, and warnings.
-
-Project goal: {data.project_goal}"""
-        if data.num_phases:
-            prompt += f" Limit to {data.num_phases} phases."
-
-        response = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that structures projects."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        plan = response.choices[0].message.content.strip()
-        project_id = str(uuid4())
-
-        supabase.table("projects").insert({
-            "id": project_id,
-            "user_id": data.user_id,
-            "name": data.project_name,
-            "goal": data.project_goal,
-            "plan": plan
-        }).execute()
-
-        return {"project_id": project_id, "plan": plan}
-
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to create project: {str(e)}")
-
-@app.post("/updates")
-async def submit_update(update: UpdateInput):
-    try:
-        summary = update.update_text
-        if update.type == "weekly":
-            prompt = f"Analyze this weekly update and return needs, issues, and progress:\n{update.update_text}"
-            response = openai_client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are a smart project analyst."},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            summary = response.choices[0].message.content.strip()
-
-        supabase.table("updates").insert({
-            "project_id": update.project_id,
-            "type": update.type,
-            "original": update.update_text,
-            "summary": summary
-        }).execute()
-
-        return {"summary": summary}
-
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to submit update: {str(e)}")
-
-@app.post("/upload")
-async def upload_document(file: UploadFile = File(...), project_id: str = Form(...)):
-    try:
-        file_bytes = await file.read()
-        file_path = f"documents/{project_id}/{file.filename}"
-
-        supabase.storage.from_("documents").upload(file_path, file_bytes, {"content-type": file.content_type})
-        public_url = supabase.storage.from_("documents").get_public_url(file_path).get("publicURL")
-
-        supabase.table("documents").insert({
-            "project_id": project_id,
-            "file_name": file.filename,
-            "url": public_url
-        }).execute()
-
-        return {"url": public_url}
-
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
-
-@app.post("/trigger-command")
-async def trigger_command(data: CommandInput):
-    try:
-        session_id = data.session_id
-        message = data.message
-
-        session_resp = supabase.table("sessions").select("step", "context").eq("id", session_id).execute()
-        if not session_resp.data:
-            step = "initial"
-            context = {}
-        else:
-            session = session_resp.data[0]
-            step = session.get("step", "initial")
-            context = session.get("context", {}) or {}
-
-        prompt = f"Context: {context}\nUser: {message}\nSystem: What is the next step? Respond as if you're in a chat, continuing based on the context."
-        response = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a conversational assistant helping manage command workflows."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        reply = response.choices[0].message.content.strip()
-
-        supabase.table("sessions").upsert({
-            "id": session_id,
-            "step": step,
-            "context": context,
-            "last_message": message,
-            "last_response": reply
-        }).execute()
-
-        return {"reply": reply}
-
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Command failed: {str(e)}")
 
 @app.post("/chat-command")
 async def chat_command(data: CommandInput):
@@ -182,65 +41,75 @@ async def chat_command(data: CommandInput):
         session_id = data.session_id
         message = data.message
 
+        # Step 1: Extract intent
         extraction_prompt = f"""
-You are an AI assistant. Extract structured intent from this user message. 
-Respond ONLY in JSON with this format:
+You are an AI assistant. Extract structured intent from the user message below.
+Respond only in JSON using this format:
 {{
   "action": "send_email",
-  "recipient_name": "<name of supplier, if mentioned>",
-  "subject": "<email subject, if obvious>",
-  "message": "<email body, if provided>"
+  "recipient_name": "<name of recipient>",
+  "topic": "<what the email is about>"
 }}
 
-User message:
-{message}
+User message: {message}
         """
 
         response = openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "You extract structured data from user messages."},
+                {"role": "system", "content": "You extract structured intent from user commands."},
                 {"role": "user", "content": extraction_prompt}
             ]
         )
 
-        parsed = response.choices[0].message.content.strip()
         try:
-            extracted = json.loads(parsed)
+            extracted = json.loads(response.choices[0].message.content.strip())
         except Exception:
-            return {"status": "error", "message": "Failed to parse message."}
+            return {"status": "error", "message": "Could not extract structured info from message."}
 
         recipient_name = extracted.get("recipient_name", "").strip()
-        subject = extracted.get("subject", "").strip()
-        email_body = extracted.get("message", "").strip()
+        topic = extracted.get("topic", "").strip()
 
         if not recipient_name:
             return {"status": "need_input", "message": "Who should I send the email to?"}
 
-        supplier_resp = supabase.table("suppliers").select("*").ilike("name", f"%{recipient_name}%").execute()
-        matches = supplier_resp.data
+        # Step 2: Search suppliers
+        people_resp = supabase.table("suppliers").select("*").ilike("name", f"%{recipient_name}%").execute()
+        matches = people_resp.data
 
         if not matches:
-            return {"status": "not_found", "message": f"No match found for '{recipient_name}'."}
+            return {"status": "not_found", "message": f"No supplier found matching '{recipient_name}'."}
 
         if len(matches) > 1:
-            options = [supplier["name"] for supplier in matches]
-            return {"status": "ambiguous", "message": f"Which '{recipient_name}' do you mean?", "options": options}
+            options = [{"id": p["id"], "name": p["name"], "email": p["email"], "material": p["material"]} for p in matches]
+            return {
+                "status": "ambiguous",
+                "message": f"Multiple suppliers match '{recipient_name}'. Please specify:",
+                "options": options
+            }
 
-        supplier = matches[0]
-        draft_subject = subject or f"Follow-up on {supplier['material']}"
-        draft_message = email_body or f"""Hi {supplier['name'].split()[0]},
+        # Step 3: Single match – generate email draft
+        recipient = matches[0]
+        email_prompt = f"""
+Draft a professional but natural email to a supplier named {recipient['name']} about the following topic: "{topic}". 
+Do not use a fixed pattern. Be helpful, clear, and direct. Only include the supplier's name in the greeting.
+        """
 
-Just reaching out regarding the {supplier['material']} you’re supplying.
+        email_response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You write emails for professionals."},
+                {"role": "user", "content": email_prompt}
+            ]
+        )
 
-Phone: {supplier['phone']}"""
+        draft = email_response.choices[0].message.content.strip()
 
         return {
             "status": "awaiting_confirmation",
-            "recipient": supplier["name"],
-            "recipient_email": supplier["email"],
-            "subject": draft_subject,
-            "message": draft_message
+            "recipient": recipient["name"],
+            "recipient_email": recipient["email"],
+            "message": draft
         }
 
     except Exception as e:
