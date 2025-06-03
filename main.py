@@ -193,9 +193,9 @@ Keep it professional but friendly. No fixed patterns. No sign-off needed.
 Only return the body of the email.
 """
     result = openai_client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-3.5 turbo",
         messages=[
-            {"role": "system", "content": "You help write professional emails."},
+            {"role": "system", "content": "You help write professional emails. do not include the name at the end of the email."},
             {"role": "user", "content": prompt}
         ]
     )
