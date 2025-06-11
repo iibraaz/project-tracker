@@ -49,7 +49,7 @@ async def chat_command(data: CommandInput):
 
         if state == "awaiting_user_email_choice":
             user_emails = session["user_emails"]
-            matched = next((e for e in user_emails if message in e.lower()), None)
+            matched = next((e for e in user_emails if message == e.lower()), None)
 
             if not matched:
                 return {
@@ -98,18 +98,40 @@ async def chat_command(data: CommandInput):
 
         if state == "awaiting_confirmation":
             if any(word in message for word in ["yes", "okay", "go ahead", "send", "sure", "approve"]):
+                if "chosen_user_email" not in session:
+                    user_emails_resp = supabase.table("user_emails").select("email").eq("user_id", session_id).execute()
+                    user_emails = [e["email"] for e in user_emails_resp.data]
+
+                    if len(user_emails) > 1:
+                        session["user_emails"] = user_emails
+                        session["state"] = "awaiting_user_email_choice"
+                        sessions[session_id] = session
+                        return {
+                            "status": "awaiting_user_email_choice",
+                            "message": "You have multiple saved emails. Which one should I use?",
+                            "options": user_emails
+                        }
+                    elif len(user_emails) == 1:
+                        session["chosen_user_email"] = user_emails[0]
+                    else:
+                        return {
+                            "status": "error",
+                            "message": "You have no saved emails. Please add one first."
+                        }
+
                 recipient = session["recipient"]
                 email_payload = {
                     "to": recipient["email"],
                     "to_name": recipient["name"],
                     "subject": f"Follow-up on: {session['topic']}",
                     "message": session["draft"],
-                    "from_email": session.get("chosen_user_email", "default@yourdomain.com")
+                    "from_email": session["chosen_user_email"]
                 }
                 resp = requests.post(N8N_WEBHOOK_URL, json=email_payload)
                 resp.raise_for_status()
                 sessions.pop(session_id, None)
                 return {"status": "sent", "message": "Email sent successfully."}
+
             elif any(word in message for word in ["no", "change", "redo", "edit", "revise"]):
                 draft = await generate_email_draft(session["recipient"]["name"], session["topic"])
                 session["draft"] = draft
