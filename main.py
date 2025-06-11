@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
+from uuid import uuid4
 import os
 import requests
 import json
@@ -46,15 +47,15 @@ async def chat_command(data: CommandInput):
         session = sessions.get(session_id, {})
         state = session.get("state", "start")
 
-        # Handle email selection
         if state == "awaiting_user_email_choice":
             user_emails = session["user_emails"]
-            matched = next((e for e in user_emails if message == e.lower()), None)
+            matched = next((e for e in user_emails if message in e.lower()), None)
 
             if not matched:
+                email_list = "\n".join([f"- {e}" for e in user_emails])
                 return {
                     "status": "awaiting_user_email_choice",
-                    "message": "I didn't recognize that. Please reply with the full email address from the list.",
+                    "message": f"I didn't recognize that. Please reply with one of the following:\n{email_list}",
                     "options": user_emails
                 }
 
@@ -70,7 +71,6 @@ async def chat_command(data: CommandInput):
                 "recipient_email": session["recipient"]["email"]
             }
 
-        # Handle ambiguous supplier match
         if state == "awaiting_recipient_choice":
             options = session.get("options", [])
             chosen = next((o for o in options if message == o["name"].lower()), None)
@@ -97,7 +97,6 @@ async def chat_command(data: CommandInput):
                 "recipient_email": chosen["email"]
             }
 
-        # Handle confirmation
         if state == "awaiting_confirmation":
             if any(word in message for word in ["yes", "okay", "go ahead", "send", "sure", "approve"]):
                 recipient = session["recipient"]
@@ -127,7 +126,6 @@ async def chat_command(data: CommandInput):
                     "message": "Should I send this email? Please reply with 'yes' to send or 'no' to revise it."
                 }
 
-        # Initial step — extract recipient + topic
         extract_prompt = f"""
         Extract the supplier name, email (if any), and topic from this user request. 
         Respond in JSON with keys: \"recipient_name\", \"recipient_email\", and \"topic\".
@@ -187,7 +185,6 @@ async def chat_command(data: CommandInput):
         else:
             recipient = people[0]
 
-        # Get global user_emails
         user_emails_resp = supabase.table("user_emails").select("email").execute()
         user_emails = [e["email"] for e in user_emails_resp.data]
 
@@ -196,22 +193,20 @@ async def chat_command(data: CommandInput):
             "topic": topic
         }
 
-        if len(user_emails) == 0:
-            return {
-                "status": "no_user_emails",
-                "message": "You have no saved emails. Please add one first."
-            }
-        elif len(user_emails) == 1:
-            session["chosen_user_email"] = user_emails[0]
-        else:
+        if len(user_emails) > 1:
+            email_list = "\n".join([f"- {e}" for e in user_emails])
             session["state"] = "awaiting_user_email_choice"
             session["user_emails"] = user_emails
             sessions[session_id] = session
             return {
                 "status": "awaiting_user_email_choice",
-                "message": "You have multiple emails saved. Which one should I use to send this email?",
+                "message": f"You have multiple emails saved. Please reply with one of the following:\n{email_list}",
                 "options": user_emails
             }
+        elif len(user_emails) == 1:
+            session["chosen_user_email"] = user_emails[0]
+        else:
+            return {"status": "no_email", "message": "You have no saved emails. Please add one first."}
 
         draft = await generate_email_draft(recipient["name"], topic)
         session.update({
@@ -231,16 +226,17 @@ async def chat_command(data: CommandInput):
         traceback.print_exc()
         return {"status": "error", "message": f"Something went wrong: {str(e)}"}
 
+
 async def generate_email_draft(name: str, topic: str) -> str:
     prompt = f"""
     Draft a natural, short email to {name} about this topic: \"{topic}\".
-    Keep it professional but friendly. No fixed patterns. No sign-off needed.
+    Keep it professional but friendly. Do not include a sign-off, sender name, or closing line like \"Best regards\" or \"Thanks\".
     Only return the body of the email.
     """
     result = openai_client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": "You help write professional emails. Do not include the name at the end."},
+            {"role": "system", "content": "You write emails that are clear and concise. No name, no sign-off, just the message."},
             {"role": "user", "content": prompt}
         ]
     )
