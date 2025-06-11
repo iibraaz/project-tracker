@@ -104,7 +104,7 @@ async def handle_recipient_choice(session_id, message, session):
         options_text = "\n".join([f"{i+1}. {o['name']}" for i, o in enumerate(options)])
         return {
             "status": "ambiguous",
-            "message": f"I found multiple matches. Please reply with the name or number:\n{options_text}",
+            "message": f"I found multiple matches\n{options_text}",
             "options": options
         }
 
@@ -120,7 +120,7 @@ async def handle_recipient_choice(session_id, message, session):
         sessions[session_id] = session
         return {
             "status": "awaiting_user_email_choice",
-            "message": f"Multiple sender emails found. Choose one:\n{email_list}",
+            "message": f"Multiple sender emails found.\n{email_list}",
             "options": user_emails
         }
     elif len(user_emails) == 1:
