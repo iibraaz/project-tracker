@@ -10,13 +10,15 @@ import traceback
 from dotenv import load_dotenv
 from supabase import create_client
 from openai import OpenAI
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 # Load environment variables
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-N8N_WEBHOOK_URL = "https://ibrahimalgazi.app.n8n.cloud/webhook-test/4d888982-1a0e-41e6-a877-f6ebb18460f3"
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 
 # Initialize clients
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -100,17 +102,26 @@ async def chat_command(data: CommandInput):
         if state == "awaiting_confirmation":
             if any(word in message for word in ["yes", "okay", "go ahead", "send", "sure", "approve"]):
                 recipient = session["recipient"]
-                email_payload = {
-                    "to": recipient["email"],
-                    "to_name": recipient["name"],
-                    "subject": f"Follow-up on: {session['topic']}",
-                    "message": session["draft"],
-                    "from_email": session.get("chosen_user_email", "default@yourdomain.com")
-                }
-                resp = requests.post(N8N_WEBHOOK_URL, json=email_payload)
-                resp.raise_for_status()
+                message_body = session["draft"]
+                subject = f"Follow-up on: {session['topic']}"
+                from_email = session.get("chosen_user_email", "default@yourdomain.com")
+
+                email = Mail(
+                    from_email=from_email,
+                    to_emails=recipient["email"],
+                    subject=subject,
+                    plain_text_content=message_body
+                )
+
+                try:
+                    sg = SendGridAPIClient(SENDGRID_API_KEY)
+                    sg.send(email)
+                except Exception as e:
+                    return {"status": "error", "message": str(e)}
+
                 sessions.pop(session_id, None)
                 return {"status": "sent", "message": "Email sent successfully."}
+
             elif any(word in message for word in ["no", "change", "redo", "edit", "revise"]):
                 draft = await generate_email_draft(session["recipient"]["name"], session["topic"])
                 session["draft"] = draft
