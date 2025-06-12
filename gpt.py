@@ -78,7 +78,7 @@ async def generate_email_draft(name: str, topic: str) -> dict:
     result = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": "You write emails that are clear and concise. No sign-off or name. Return ONLY valid JSON in this format: { 'subject': 'short subject', 'message': 'email body content' }"},
+            {"role": "system", "content": "You write emails that are clear and concise. No sign-off or name. Return ONLY valid JSON in this format: { 'subject': 'short subject', 'message': 'email body content' }. The subject must be a short subject line suitable for an email header (no 'Subject:' prefix, no body content). The message must be the email body only."},
             {"role": "user", "content": prompt}
         ]
     )
