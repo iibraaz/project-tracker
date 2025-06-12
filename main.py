@@ -150,11 +150,12 @@ async def handle_confirmation(session_id, message, session):
         if not from_email:
             return {"status": "error", "message": "Missing sender email."}
 
+        parsed = await generate_email_draft(recipient["name"], session["topic"])
         email = Mail(
             from_email=from_email,
             to_emails=recipient["email"],
-            subject=f"Follow-up on: {session['topic']}",
-            plain_text_content=session["draft"]
+            subject=parsed["subject"],
+            plain_text_content=parsed["message"]
         )
 
         try:
@@ -166,12 +167,12 @@ async def handle_confirmation(session_id, message, session):
         return {"status": "sent", "message": "Email sent successfully."}
 
     elif any(word in message for word in ["no", "change", "redo", "edit", "revise"]):
-        draft = await generate_email_draft(session["recipient"]["name"], session["topic"])
-        session["draft"] = draft
+        parsed = await generate_email_draft(session["recipient"]["name"], session["topic"])
+        session["draft"] = parsed["message"]
         sessions[session_id] = session
         return {
             "status": "awaiting_confirmation",
-            "message": draft,
+            "message": parsed["message"],
             "recipient": session["recipient"]["name"]
         }
 
