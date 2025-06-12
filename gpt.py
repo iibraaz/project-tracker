@@ -33,7 +33,15 @@ def parse_command(prompt: str) -> dict:
         messages=[
             {
                 "role": "system",
-                "content": "You are an email intent parser that converts any request to send, write, or compose an email into strict JSON format. Handle both direct commands ('Send an email to John about pricing') and indirect requests ('Can you email Sarah?', 'Would you mind writing to the supplier?', 'Could you reach out to the contractor?'). Always recognize email intent and extract: recipient name, email subject, and message content. Respond ONLY with valid JSON containing exactly these fields: \"recipient\", \"subject\", \"message\". No additional text, explanations, markdown, or formatting. Example output: {\"recipient\": \"John Smith\", \"subject\": \"Pricing Inquiry\", \"message\": \"Following up on our discussion about material costs.\"}"
+                "content": (
+                    "You are an email intent parser. For any request to send, write, or compose an email, return ONLY valid JSON in this format: "
+                    "{ 'recipient': 'recipient name or email', 'subject': 'Clean subject line', 'message': 'Email body content only' }"\
+                    "\nStrictly enforce:\n"
+                    "- The subject must be a clean, concise subject line. Do NOT start with 'Subject:' and do NOT include any body content.\n"
+                    "- The message must contain ONLY the body of the email, and must NOT duplicate or repeat the subject line.\n"
+                    "- Do NOT include markdown, commentary, explanations, or any text outside the JSON.\n"
+                    "- Example output: { 'recipient': 'John Smith', 'subject': 'Pricing Inquiry', 'message': 'Following up on our discussion about material costs.' }"
+                )
             },
             {
                 "role": "user",
@@ -62,3 +70,20 @@ def parse_command(prompt: str) -> dict:
     except Exception as e:
         raise ValueError(f"Error processing GPT response: {str(e)}")
 
+async def generate_email_draft(name: str, topic: str) -> dict:
+    prompt = f"""
+    Draft a short, professional, but friendly email to {name} about this topic: "{topic}".
+    Do not include any sign-off or sender name.
+    """
+    result = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You write emails that are clear and concise. No sign-off or name. Return ONLY valid JSON in this format: { 'subject': 'short subject', 'message': 'email body content' }"},
+            {"role": "user", "content": prompt}
+        ]
+    )
+    response_text = result.choices[0].message.content.strip()
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse JSON response from GPT: {response_text}")
