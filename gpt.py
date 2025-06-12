@@ -71,19 +71,54 @@ def parse_command(prompt: str) -> dict:
         raise ValueError(f"Error processing GPT response: {str(e)}")
 
 async def generate_email_draft(name: str, topic: str) -> dict:
+    """Generate an email draft with a clean subject and message body.
+    Returns a dict with 'subject' and 'message' keys."""
     prompt = f"""
-    Draft a short, professional, but friendly email to {name} about this topic: "{topic}".
-    Do not include any sign-off or sender name.
+    Create a professional email to {name} about: {topic}
+    Return ONLY a JSON object with exactly these fields:
+    - subject: A short, clean subject line (no 'Subject:' prefix)
+    - message: The email body content only
     """
-    result = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You write emails that are clear and concise. No sign-off or name. Return ONLY valid JSON in this format: { 'subject': 'short subject', 'message': 'email body content' }. The subject must be a short subject line suitable for an email header (no 'Subject:' prefix, no body content). The message must be the email body only."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    response_text = result.choices[0].message.content.strip()
+    
     try:
-        return json.loads(response_text)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse JSON response from GPT: {response_text}")
+        result = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an email drafting assistant. Return ONLY a valid JSON object with exactly two fields:\n"
+                        "1. 'subject': A short, clean subject line for the email header. Do not include 'Subject:' prefix.\n"
+                        "2. 'message': The email body content only. Do not repeat the subject.\n"
+                        "Example: {\"subject\": \"Project Update Meeting\", \"message\": \"I hope this email finds you well...\"}\n"
+                        "Do not include any other text, markdown, or formatting outside the JSON object."
+                    )
+                },
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7
+        )
+        
+        response_text = result.choices[0].message.content.strip()
+        parsed = json.loads(response_text)
+        
+        # Validate the response has required fields
+        if not isinstance(parsed, dict) or 'subject' not in parsed or 'message' not in parsed:
+            raise ValueError("Invalid response format")
+            
+        # Clean up the subject if it has 'Subject:' prefix
+        subject = parsed['subject']
+        if subject.lower().startswith('subject:'):
+            subject = subject[8:].strip()
+            
+        return {
+            'subject': subject,
+            'message': parsed['message']
+        }
+        
+    except (json.JSONDecodeError, ValueError, KeyError, AttributeError) as e:
+        # Fallback to default template if parsing fails
+        return {
+            'subject': f"Follow-up: {topic}",
+            'message': f"Dear {name},\n\nI hope this email finds you well. I wanted to follow up regarding {topic}.\n\nBest regards"
+        }
