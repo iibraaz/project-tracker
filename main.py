@@ -237,7 +237,7 @@ async def handle_new_request(session_id, raw_message):
         sessions[session_id] = session
         return {
             "status": "ambiguous",
-            "message": f"I found multiple matches.\n{options_text}",
+            "message": f"I found multiple matches. Please choose one of the options below:\n{options_text}",
             "options": options
         }
     else:
