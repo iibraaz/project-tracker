@@ -1,5 +1,6 @@
 import openai
 import os
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,20 +27,38 @@ def generate_project_report(prompt: str) -> str:
 
 
 def parse_command(prompt: str) -> dict:
-    """Parses a natural language command into structured JSON with keys: to, subject, message."""
+    """Parses a natural language command into structured JSON with keys: recipient, subject, message."""
     response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[
             {
                 "role": "system",
-                "content": "You're an assistant that turns commands into JSON with fields: to (recipient name), subject, message. Example: 'Send an email to Omar about iron quotation' should return {\"to\": \"Omar\", \"subject\": \"Iron Quotation\", \"message\": \"...\"}"
+                "content": "You are an email intent parser that converts any request to send, write, or compose an email into strict JSON format. Handle both direct commands ('Send an email to John about pricing') and indirect requests ('Can you email Sarah?', 'Would you mind writing to the supplier?', 'Could you reach out to the contractor?'). Always recognize email intent and extract: recipient name, email subject, and message content. Respond ONLY with valid JSON containing exactly these fields: \"recipient\", \"subject\", \"message\". No additional text, explanations, markdown, or formatting. Example output: {\"recipient\": \"John Smith\", \"subject\": \"Pricing Inquiry\", \"message\": \"Following up on our discussion about material costs.\"}"
             },
             {
                 "role": "user",
                 "content": prompt
             }
         ],
-        temperature=0.2
+        temperature=0.1
     )
 
-    return eval(response['choices'][0]['message']['content'])  # or use json.loads if GPT outputs JSON string
+    response_text = response['choices'][0]['message']['content'].strip()
+    
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError as e:
+        # Fallback: try to extract JSON from response if wrapped in markdown or extra text
+        import re
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
+        
+        # If all parsing fails, return error structure
+        raise ValueError(f"Failed to parse JSON response from GPT: {response_text}")
+    except Exception as e:
+        raise ValueError(f"Error processing GPT response: {str(e)}")
+
