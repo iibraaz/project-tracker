@@ -82,14 +82,14 @@ async def handle_email_choice(session_id, message, session):
 
     session["chosen_user_email"] = matched
 
-    draft = await generate_email_draft(session["recipient"]["name"], session["topic"])
-    session["draft"] = draft
+    parsed = await generate_email_draft(session["recipient"]["name"], session["topic"])
+    session["draft"] = parsed["message"]
     session["state"] = "awaiting_confirmation"
     sessions[session_id] = session
 
     return {
         "status": "awaiting_confirmation",
-        "message": draft,
+        "message": parsed["message"],
         "recipient": session["recipient"]["name"],
         "recipient_email": session["recipient"]["email"]
     }
@@ -128,14 +128,14 @@ async def handle_recipient_choice(session_id, message, session):
     else:
         return {"status": "no_email", "message": "No sender emails saved. Please add one."}
 
-    draft = await generate_email_draft(chosen["name"], session["topic"])
-    session["draft"] = draft
+    parsed = await generate_email_draft(chosen["name"], session["topic"])
+    session["draft"] = parsed["message"]
     session["state"] = "awaiting_confirmation"
     sessions[session_id] = session
 
     return {
         "status": "awaiting_confirmation",
-        "message": draft,
+        "message": parsed["message"],
         "recipient": chosen["name"],
         "recipient_email": chosen["email"]
     }
@@ -263,30 +263,54 @@ async def handle_new_request(session_id, raw_message):
     else:
         return {"status": "no_email", "message": "No sender emails saved. Please add one."}
 
-    draft = await generate_email_draft(recipient["name"], topic)
+    parsed = await generate_email_draft(recipient["name"], topic)
     session.update({
         "state": "awaiting_confirmation",
-        "draft": draft
+        "draft": parsed["message"]
     })
     sessions[session_id] = session
 
     return {
         "status": "awaiting_confirmation",
-        "message": draft,
+        "message": parsed["message"],
         "recipient": recipient["name"],
         "recipient_email": recipient["email"]
     }
 
-async def generate_email_draft(name: str, topic: str) -> str:
+async def generate_email_draft(name: str, topic: str) -> dict:
     prompt = f"""
-    Draft a short, professional, but friendly email to {name} about this topic: "{topic}".
+    Draft a short, professional, but friendly email to {name} about this topic: \"{topic}\".
+    Include a subject line at the top like this:
+    Subject: <your subject here>
+
+    Then add the email message starting with:
+    Message: <your message here>
+
     Do not include any sign-off or sender name.
     """
+
     result = openai_client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": "You write emails that are clear and concise. No sign-off or name."},
+            {"role": "system", "content": "You write emails that are clear and concise. No sign-off or sender name."},
             {"role": "user", "content": prompt}
         ]
     )
-    return result.choices[0].message.content.strip()
+
+    response = result.choices[0].message.content.strip()
+    lines = response.splitlines()
+    subject = ""
+    message_lines = []
+    in_message = False
+
+    for line in lines:
+        if line.lower().startswith("subject:"):
+            subject = line[len("subject:"):].strip()
+        elif line.lower().startswith("message:"):
+            in_message = True
+            message_lines.append(line[len("message:"):].strip())
+        elif in_message:
+            message_lines.append(line.strip())
+
+    message = "\n".join(message_lines)
+    return {"subject": subject, "message": message}
